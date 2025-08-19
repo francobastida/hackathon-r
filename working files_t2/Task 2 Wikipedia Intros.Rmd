@@ -1,0 +1,171 @@
+---
+title: "Task 2 Visualization Wikipedia Intros"
+author: "Lisa Rabba"
+date: "2024-12-17"
+output: html_document
+---
+```{r}
+pacman::p_load(tidyverse, legislatoR, getwiki, httr, jsonlite, ggplot2)
+```
+
+#Get core and wikipedia history data frames
+```{r}
+#Working with the data
+?legislatoR()
+#Check the different country codes:
+legislatoR::cld_content()
+
+#The German Bundestag is #deu
+core_ger <- get_core(legislature = "deu")
+head(core_data)
+
+wiki_ger <- get_history(legislature = "deu")
+
+```
+
+#Scrape the wikipedia articles and see how long they are (The function to calculate the word count and the loop are based on ChatGPT answers to my question how to overcome the 50 article limit of the get_wiki() function that I had researched myself before and how to solve several errors the function produced.)
+```{r}
+#Get titles of articles to be scraped as a character string
+wikititle <- dplyr::pull(core_data, wikititle)
+
+# Function to count words
+calculate_word_count <- function(text) {
+  if (is.null(text) || text == "") {
+    return(NA)
+  }
+  words <- unlist(strsplit(text, "\\s+"))
+  return(length(words))
+}
+
+# Extract article text (only introduction, to limit the data to an amount my laptop can handle)
+get_article <- function(title) {
+  url <- "https://de.wikipedia.org/w/api.php"
+  params <- list(
+    action = "query",
+    titles = title,
+    prop = "extracts",
+    exintro = TRUE,
+    format = "json"
+  )
+  
+  response <- GET(url, query = params)
+  content <- content(response, as = "parsed")
+  
+  
+  pages <- content$query$pages
+  page_id <- names(pages)
+  
+  #return NULL in case article does not exist (According to the legislatoR data, every member of Bundestag has an article. However, in previous versions of this code the loop would stop because it could not match some of the article names to actual articles. I choose this as an easy patch because I checked some of the respective articles and there seemed to be no reason why they could not be matched, but the issue also seemed not to be systematic. This is why I expect that leaving the articles out might increase random noise, but is unlikely to introduce bias to the analysis)
+  if (length(page_id) > 0) {
+    extract_text <- pages[[page_id]]$extract
+    return(extract_text)
+  } else {
+    return(NULL)
+  }
+}
+#the wikipedia API is limited to 50 articles at a time -> split up the list in batches of 50
+batches <- split(wikititle, ceiling(seq_along(wikititle) / 50))
+
+# save results
+all_word_counts <- list()
+
+# Loop to iterate over the batches
+for (i in seq_along(batches)) {
+  cat("Verarbeite Batch", i, "von", length(batches), "\n")
+  
+  current_batch <- batches[[i]]
+  
+  
+  articles <- lapply(current_batch, get_article)
+  
+  
+  word_counts <- sapply(articles, calculate_word_count)
+  names(word_counts) <- current_batch  
+  
+  all_word_counts <- c(all_word_counts, word_counts)
+}
+
+#summarize the result in a dataframe and delete NAs (necessary to join them in the next step)
+word_counts_df_full <- data.frame(
+  wikititle = names(all_word_counts),
+  Word_Count = unlist(all_word_counts)
+) %>%
+  filter(!is.na(wikititle))
+
+
+print(head(word_counts_df))
+```
+
+#Visualize the gender ratio
+```{r}
+#Join dataframe with word length and core dataframe
+core_wikilength <- left_join(core_data, word_counts_df)
+
+#Bar chart of means
+core_wikilength %>%
+  filter(!is.na(sex),
+         !is.na(Word_Count)) %>% 
+  group_by(sex) %>% 
+  summarize(
+    mean_length = mean(Word_Count)) %>%
+  ggplot(aes(x=sex, y=mean_length, fill = sex)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = round(mean_length, 1), vjust = 2))
+
+#Histogram
+core_wikilength %>%
+  filter(!is.na(sex),
+         !is.na(Word_Count)) %>% 
+  ggplot(aes(x = sex, y = Word_Count, fill = sex)) +
+  geom_boxplot() +
+  ## use either geom_point() or geom_jitter()
+  geom_point(
+    ## draw bigger points
+    size = 2,
+    ## add some transparency
+    alpha = .3,
+    ## add some jitterin
+    position = position_jitter(
+      ## control randomness and range of jitter
+      seed = 1, width = .2
+    )
+  )
+
+#Dots
+Wikipedia_intros <- core_wikilength %>%
+  filter(!is.na(sex),
+         !is.na(Word_Count)) %>% 
+  ggplot(aes(x = sex, y = Word_Count)) +
+  ## use either geom_point() or geom_jitter()
+  geom_point(aes(colour = factor(sex)),
+    ## draw bigger points
+    size = 2,
+    ## add some transparency
+    alpha = .3,
+    ## add some jittering
+    position = position_jitter(
+      ## control randomness and range of jitter
+      seed = 1, width = .2
+    )
+  ) + theme_bw() +
+  labs(x = "Gender",
+       y = "Word count of Wikipedia Article Introduction",
+       title = "The Word Count of Parliamentarian's Wikipedia Article Introductions by Gender",
+       subtitle = "Each dot represents a Wikipedia article.") +
+  theme(legend.position = "none")
+
+ggsave("C:/Users/lisar/Documents/GitHub/hackathon-project-auf-deutsch-espanol/Wikipedia_intros.jpeg", Wikipedia_intros)
+  
+   
+
+#Violin plot
+core_wikilength %>%
+  filter(!is.na(sex),
+         !is.na(Word_Count)) %>% 
+  ggplot(aes(x = sex, y = Word_Count, fill = sex)) +
+   geom_violin() +
+  theme_bw()
+```
+
+
+

@@ -1,0 +1,156 @@
+---
+title: "Code for the Wikipedia Metrics Plot"
+output: html_document
+date: "2024-12-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE)
+pacman::p_load(stringr, dplyr, ggplot2, legislatoR, rvest, httr)
+```
+
+To set up the data:
+```{r}
+#Taken from my other r file, code to set up:
+core_data <- get_core(legislature = "deu")
+political_data <- get_political(legislature = "deu")
+#Join the political and core data frames 
+deu_politicians <- left_join(x = get_political(legislature = "deu"),
+y = get_core(legislature = "deu"),
+by = "pageid")
+#Filter for only currently elected politicians (2021 elections)
+current_deu_politicians <- deu_politicians %>% 
+  filter(session == "20")
+
+#We will use the page_title variable to scrape each page. As some of the page titles have a suffix for the German version of the page, that then does not allow us to access to English language version, we will first clean the data to remove these suffixes. We are using data for politicians only in the current session of the German Bundestag. 
+# Remove the suffix (_(...))
+current_deu_politicians_cleaned <- current_deu_politicians %>%
+  mutate(clean_title = str_remove(wikititle, "_\\(.*\\)")) 
+```
+
+
+
+Scrape the 'Tools Information' data from the wikipedia page of each politician.
+Note: As I do not speak German, this data is taken from the English version of Wikipedia and the respective English pages for each politician. The outcomes will vary if using the German language Wikipedia pages. 
+```{r, eval = FALSE}
+#Now we go on to the process to scrape this data from the Wikipedia pages (Tools > Page information)
+#Disclaimer: I used ChatGPT to help me develop this code for the web scraping, including the function so that it would work for all politicians. 
+
+# Function to extract Page Information table
+get_page_info_table <- function(page_title) {
+  # Construct the Wikipedia Page Information URL
+  url <- paste0("https://en.wikipedia.org/wiki/Special:PageInfo/", page_title)
+  
+  # Custom User-Agent for identification
+  user_agent <- "MyScraper/1.0 (239793@students.hertie-school.org)"
+  
+  # Read the page safely with error handling
+  page <- tryCatch({
+    GET(url, user_agent(user_agent)) %>% read_html()
+  }, error = function(e) {
+    message(paste("Error accessing:", page_title, "->", e$message))
+    return(NULL)
+  })
+  
+  # Extract the Page Information table
+  if (!is.null(page)) {
+    info_table <- tryCatch({
+      page %>%
+        html_node("table.wikitable") %>%  # Locate the main table with class 'wikitable'
+        html_table(fill = TRUE)
+    }, error = function(e) {
+      message(paste("No table found for:", page_title))
+      return(NULL)
+    })
+    
+    # Clean and organize the data if table exists
+    if (!is.null(info_table)) {
+      info_clean <- info_table %>%
+        rename(Metric = 1, Value = 2) %>%  # Rename columns
+        mutate(Value = trimws(Value), Page = page_title)  # Clean whitespace, add Page column
+      
+      return(info_clean)
+    }
+  }
+  
+  return(NULL)
+}
+
+# List of Wikipedia page titles
+page_titles <- dplyr::pull(current_deu_politicians_cleaned, clean_title)
+
+# Empty dataframe to store all results
+all_page_info <- tibble()
+
+# Loop through page titles with rate limiting
+for (page_title in page_titles) {
+  message(paste("Fetching Page Info for:", page_title))
+  
+  # Extract table data
+  info <- get_page_info_table(page_title)
+  
+  # Append to results
+  if (!is.null(info)) {
+    all_page_info <- bind_rows(all_page_info, info)
+  }
+  
+  # Respect rate limits: 1-second pause
+  Sys.sleep(1)
+}
+
+# Save to CSV
+write.csv(all_page_info, "wikipedia_page_info.csv", row.names = FALSE)
+
+```
+Now turn it into a plot:
+```{r, fig.width=10, fig.height=6}
+#Export to CSV
+all_page_info <- read.csv("wikipedia_page_info.csv")
+
+#Filter only for the variables we are interested in
+all_page_info_subset <- all_page_info %>% 
+  filter(Metric %in% c("Page length (in bytes)", 
+                       "Number of redirects to this page", 
+                       "Page views in the past 30 days")) %>% 
+  rename(clean_title = Page) %>% 
+  mutate(Value = as.numeric(gsub(",", "", Value)))
+
+#Join it with the full data set to get the gender information
+joined_df <- left_join(x = current_deu_politicians_cleaned, 
+                       y = all_page_info_subset,
+                       by = "clean_title")
+
+#Subset again 
+data_for_graph3 <- joined_df %>% 
+  select(sex, clean_title, Metric, Value) %>% 
+  filter(!is.na(sex)) %>% 
+  mutate(sex = ifelse(sex == "male", "Male", sex)) %>% 
+  mutate(sex = ifelse(sex == "female", "Female", sex))
+
+#Create a subset of data with the 5 highest values for each Metric
+label_points <- data_for_graph3 %>%
+  group_by(Metric) %>%
+  slice_max(Value, n = 5, with_ties = FALSE) %>%  # Get top 5 values
+  ungroup()
+
+#Plot the data with labels for the top 5 values
+metrics_plot <- ggplot(data_for_graph3, aes(x = sex, y = Value, color = sex)) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.7) + 
+  facet_wrap(~ Metric, scales = "free_y") +         
+  geom_text(data = label_points, aes(label = clean_title), 
+            vjust = -1, size = 3, color = "black") +
+  labs(title = "Gender Differences in Redirects, Page Length, and Views",
+       subtitle = "Taken from the 'Page Information' section of Wikipedia articles for the current members of the German Bundestag, this graph shows\n differences by gender for the below three variables. The highest 5 values for each variable are labelled to note the outliers.\n Source: LegislatoR package and Wikipedia.",
+       x = "Gender",
+       y = "Value",
+       color = "Gender") +
+  theme_minimal()
+
+metrics_plot
+
+#Save the plot
+ggsave(filename = "metrics_plot.jpeg", plot = metrics_plot, width = 10, height = 6, dpi = 300)
+
+```
+

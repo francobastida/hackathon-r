@@ -1,0 +1,130 @@
+---
+title: "Task 1.3"
+author: elenamurray (elena.murray@hotmail.com)
+output: html_document
+date: "`r format(Sys.time(), '%B %d, %Y | %H:%M:%S | %Z')`"
+---
+## Distribution of Wikipedia edit activity throughout the day by the weekday for Irish TDs
+(TDs = members of the Assembly of Ireland)
+
+Illustrate with a ridgeplot the distribution of Wikipedia edit activity throughout the
+day by weekday following good practice of visualizations. Assume that all edits come
+from Ireland. For this plot you should:
+
+• use a subset of TDs from the 11th legislative session of the Irish Dáil Éireann.
+• report the data and editors’ local times, which requires you to update the time of
+each edit based to the respective Dublin time zone.
+• add vertical lines at the quartiles and color the quartile segments so that, across
+days, same quartiles share the same colors.
+• provide a title and description in the plot, making it a standalone figure that speaks
+for itself.
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      error = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      comment = NA)
+```
+
+Disclaimer: I used ChatGPT to correct errors in my code I was unable to resolve myself, and for help re-ordering the variables using the forcats package. 
+
+Load packages:
+```{r}
+library(legislatoR)
+library(dplyr)
+library(lubridate)
+library(ggridges)
+library(ggplot2)
+library(forcats)
+library(hms)
+```
+
+
+Prepare the data: 
+```{r}
+#Load the core data for Ireland
+irl_data <- get_core(legislature = "irl")
+
+#Create the political data frame
+irl_political <- get_political(legislature = "irl")
+
+#Join the political and core data frames 
+irl_politicians <- left_join(x = irl_political,
+y = irl_data,
+by = "pageid")
+
+#Get the wikipedia history data
+irl_history <- get_history(legislature = "irl")
+
+#Join this to the first data frame 
+irl_fulldata <- left_join(x = irl_history,
+y = irl_politicians,
+by = "pageid")
+
+```
+
+Step 1: Use a subset of TDs from the 11th legislative session of the Irish Dáil Éireann.
+```{r}
+#Subset to TDs from the 11th session
+irl_fulldata_11 <- irl_fulldata %>% 
+  filter(session == "11")
+
+```
+
+Step 2: Report the data and editors’ local times, which requires you to update the time of
+each edit based to the respective Dublin time zone.
+
+We assume all edits are made in Ireland - that means the time zones is adjusted to the Dublin timezone (which automatically accounts for daylight savings time as well.)
+
+```{r}
+#Convert the timestamp to Dublin time using Lubridate, then filter for only weekdays
+irl_fulldata_filtered <- irl_fulldata_11 %>%
+  mutate(timestamp_dublin = with_tz(timestamp, tzone = "Europe/Dublin")) %>% 
+  mutate(day_of_week = wday(timestamp_dublin, label = T)) %>% 
+  mutate(time = as_hms(timestamp_dublin)) %>% 
+  filter(day_of_week %in% c("Mon", "Tue", "Wed", "Thu", "Fri")) %>% 
+  mutate(day_of_week = fct_recode(day_of_week,
+    "Monday" = "Mon",
+    "Tuesday" = "Tue",
+    "Wednesday" = "Wed",
+    "Thursday" = "Thu",
+    "Friday" = "Fri",
+    "Saturday" = "Sat",
+    "Sunday" = "Sun")) %>% 
+  mutate(day_of_week = fct_rev(day_of_week)) 
+
+```
+
+Step 3: Create the Plot
+• add vertical lines at the quartiles and color the quartile segments so that, across
+days, same quartiles share the same colors.
+• provide a title and description in the plot, making it a standalone figure that speaks
+for itself.
+
+```{r}
+#Plot the graph 
+ggplot(irl_fulldata_filtered, aes(x = time, y = day_of_week, fill = factor(stat(quantile)))) +
+  stat_density_ridges(
+    geom = "density_ridges_gradient", calc_ecdf = TRUE,
+    quantiles = 4, quantile_lines = TRUE,
+    scale = 1.2
+  ) +
+  scale_fill_brewer(palette = "Blues", name = "Quartiles") +
+  theme_ridges(center_axis_labels = TRUE) +
+  scale_x_time(
+    name = "Time of Day",
+    limits = c(hms::as_hms("00:00:00"), hms::as_hms("24:00:00")),
+    breaks = hms::as_hms(c("00:00:00", "06:00:00", "12:00:00", "18:00:00", "24:00:00")),
+    labels = c("0:00", "6:00", "12:00", "18:00", "24:00"),
+) +
+  scale_y_discrete(
+    name = "Day of the Week",
+    expand = expand_scale(mult = c(0.05, 0.3))) +
+  labs(
+    title = "Wikipedia Edits by Time of Day in Ireland (Weekdays)",
+    subtitle = "This graph shows at what time of the day edits to Wikipedia pages of Irish \n TDs in the 11th session of the Irish Dáil Éireann are made (on weekdays). \n The times shown are in GMT. Source: LegislatoR package.")
+
+```
+

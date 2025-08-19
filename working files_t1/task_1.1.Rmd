@@ -1,0 +1,123 @@
+---
+title: "Task 1.1 Interactive map of US Senator birthplaces"
+author: "Lisa Rabba"
+date: "2024-12-16"
+output: html_document
+---
+
+```{r}
+pacman::p_load(tidyverse, legislatoR, leaflet, sf, jsonlite, RColorBrewer, htmlwidgets, tigris, viridis)
+```
+
+#Load the data (Based on Elena's prep code)
+```{r}
+#Get the core dataset of the US Senate and exclude senators with NA birthplace
+core_usa_senate <- get_core(legislature = "usa_senate") %>%
+  filter(!is.na(birthplace)) %>%
+  #Solution suggested by ChatGPT when asked why the st_as_sf() function 
+  #would not recognize the coordinates in the original birthplace column
+  separate(birthplace, into = c("lat", "lng"), sep = ",", convert = TRUE)
+  
+head(core_usa_senate)
+```
+#Basic US-map with tiles
+```{r}
+#Load the GeoJSON Data of the US states
+polygon_data <- read_sf("C:/Users/lisar/Documents/GitHub/hackathon-project-auf-deutsch-espanol/Task 1.1/us-states.json")
+
+
+#Get a map of the US
+Map_usa <- leaflet() %>%
+  setView(lng = -96, lat = 37.8, zoom = 4) %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik) %>%
+  addPolygons(data = polygon_data, color = "blue", stroke = 1, opacity = 0.8)
+
+Map_usa  #Print the map
+```
+
+#Complex map with born senators per state
+```{r}
+#Converting senate data into sf objects
+usa_senate_sf <- st_as_sf(core_usa_senate, coords = c("lng", "lat"), crs = 4326, remove = FALSE)
+
+#Perform a spatial join assigning each senator to a polygon
+states_sf <- states(cb = TRUE) %>%  
+  st_transform(crs = 4326) 
+
+birthplace_with_state <- st_join(usa_senate_sf, states_sf, join = st_within)
+
+#Counting Senators by state
+senator_by_state <- birthplace_with_state %>%
+  filter(!is.na(NAME)) %>%  #Removing NAs
+  group_by(NAME) %>%        #
+  summarize(senator_count = n())
+
+#Rejoin to be able to produce map
+senator_by_state_df <- senator_by_state %>%
+  st_drop_geometry()
+
+aggregated_senator_states <- left_join(birthplace_with_state, senator_by_state_df, by = c("NAME"))
+
+#Data clean up
+aggregated_senator_states <- aggregated_senator_states %>% 
+  rename(state = NAME)
+         
+aggregated_senator_summary <- aggregated_senator_states %>%
+    group_by(name, state) %>%
+    summarize(
+      id = STUSPS,
+      state = state,
+        lat = lat,
+        lng = lng,
+        `total senators` = senator_count,
+        geometry = geometry
+    )
+```
+
+
+#Interactive map with Senator count by state (total)
+```{r}
+aggregated_senator_summary_df <- aggregated_senator_summary %>%
+  st_drop_geometry()
+
+polygon_data <- polygon_data %>%
+  left_join(aggregated_senator_summary_df, by = c("id" = "id")) %>%
+  mutate(   `total senators` = ifelse(is.na(`total senators`), 0, `total senators`))
+
+#Formatting standards
+pal <- colorNumeric(
+  palette = "viridis",
+  domain = polygon_data$`total senators`,
+  na.color = "transparent" 
+)
+
+polygon_data <- polygon_data %>%
+  mutate(
+    popup_info = paste0("<b>", state, ":</b> ", `total senators`, " Senators")
+  )
+
+#Load the GeoJSON Data of the US states
+map_usa <- leaflet(polygon_data) %>%
+  setView(lng = -96, lat = 37.8, zoom = 4) %>%  # Center the map
+  addProviderTiles(providers$OpenStreetMap.Mapnik) %>% 
+  addPolygons(
+    fillColor = ~pal(`total senators`),   
+    weight = 1,                         
+    color = "white",                    
+    fillOpacity = 0.6,
+    popup = ~popup_info, 
+    highlightOptions = highlightOptions(
+      weight = 2, color = "blue", bringToFront = TRUE
+    )
+  ) %>%
+  addLegend(
+    position = "bottomleft",
+    pal = pal,
+    values = ~`total senators`,
+    title = "Senator Birthplaces (Since 1789)",
+    opacity = 0.5
+  )
+
+map_usa
+```
+

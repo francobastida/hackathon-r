@@ -1,0 +1,113 @@
+---
+title: "Code for the Social Media Plot"
+output: html_document
+date: "2024-12-15"
+---
+
+```{r}
+library(legislatoR)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(rvest)
+library(stringr)
+```
+
+```{r}
+#Working with the data
+?legislatoR()
+#Check the different country codes:
+legislatoR::cld_content()
+
+#The German Bundestag is #deu
+core_data <- get_core(legislature = "deu")
+head(core_data)
+
+```
+```{r}
+#Create the political data frame
+political_data <- get_political(legislature = "deu")
+head(political_data)
+
+#Join the political and core data frames 
+deu_politicians <- left_join(x = get_political(legislature = "deu"),
+y = get_core(legislature = "deu"),
+by = "pageid")
+head(deu_politicians)
+
+#Filter for only currently elected politicians (2021 elections)
+current_deu_politicians <- deu_politicians %>% 
+  filter(session == "20")
+
+# Create a frequency table for gender
+gender_table <- table(current_deu_politicians$sex)
+print(gender_table)
+
+# Calculate gender proportions 
+gender_prop <- prop.table(gender_table)
+print(gender_prop)
+  
+```
+
+```{r}
+#Bring in the social media data 
+#Create the Socials data frame
+deu_social <- get_social(legislature = "deu")
+
+#Join current politicians with the social 
+current_pols_socials <- left_join(x = current_deu_politicians,
+y = get_social(legislature = "deu"),
+by = "wikidataid")
+head(current_pols_socials)
+
+#What proportion of gender has each social media platform listed on their wikipedia page
+socials_data <- current_pols_socials %>% 
+  filter(!is.na(sex)) %>% 
+  group_by(sex) %>% 
+  summarise(
+    have_twitter = sum(!is.na(twitter)) / n()*100,
+    have_facebook = sum(!is.na(facebook)) / n()*100,
+    have_youtube = sum(!is.na(youtube)) / n()*100,
+    have_linkedin = sum(!is.na(linkedin)) / n()*100,
+    have_instagram = sum(!is.na(instagram)) / n()*100,
+    have_website = sum(!is.na(website)) / n()*100,
+    have_tiktok = sum(!is.na(website)) / n()*100
+  )
+socials_data
+
+#Reshape data
+data_long <- pivot_longer(socials_data, cols = -sex, 
+                          names_to = "platform", values_to = "percentage")
+
+#Calculate averages to order the x axis
+platform_order <- data_long %>%
+  group_by(platform) %>%
+  summarise(avg_percentage = mean(percentage)) %>%
+  arrange(desc(avg_percentage)) %>%
+  pull(platform)
+
+#Reorder platform order
+data_long$platform <- factor(data_long$platform, levels = platform_order)
+```
+
+Graph of Social Media Use Among Men and Women in the current session of the German Bundestag:
+
+```{r}
+socialmedia_plot <- ggplot(data_long, aes(x = platform, y = percentage, fill = sex)) +
+  geom_bar(stat = "identity", position = position_dodge(0.7)) +
+  scale_x_discrete(
+    name = "Platform",
+    labels = c("TikTok", "Personal Website", "Facebook", "Twitter", "LinkedIn", "YouTube", "Instagram"),
+    expand = expansion(mult = c(0.2, 0.2))) +
+  labs(
+    title = "How does Social Media use compare by gender among members of the current \n German Bundestag?",
+    subtitle = "Active social media use is measured by whether the politician has their account for each social media \n platform linked to their Wikipedia page.",
+    y = "Percentage") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+socialmedia_plot
+
+ggsave(filename = "socialmedia_plot.jpeg", plot = socialmedia_plot, width = 8, height = 5, dpi = 300)
+
+```
