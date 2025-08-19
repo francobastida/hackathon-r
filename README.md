@@ -8,11 +8,11 @@ The members of this group were: Lisa Rabba, Elena Murray and Franco Bastida.
 ### Statement of Contribution 
 Task 1:
 
-Lisa prepared task 1.1
+Lisa, task 1.1
 
-Elena prepared task 1.3
+Elena, task 1.3
 
-Franco prepared task 1.4., revised code and cleaned up files, GitHub maintenance.
+Franco, task 1.1 & 1.4., general code revision, GitHub maintenance.
 
 Task 2:
 Collaborative effort by all group members. 
